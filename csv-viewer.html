@@ -885,17 +885,23 @@ if ('serviceWorker' in navigator) {
 }
 
 // ─── PWA: File Handling API - handle files opened via OS association ───
-if ('launchQueue' in window) {
-  launchQueue.setConsumer(async (launchParams) => {
+if ('launchQueue' in window && 'LaunchParams' in window) {
+  window.launchQueue.setConsumer(async (launchParams) => {
+    console.log('[launchQueue] fired with', launchParams.files?.length || 0, 'files');
     if (!launchParams.files || !launchParams.files.length) return;
     try {
       const fileHandle = launchParams.files[0];
       const file = await fileHandle.getFile();
+      console.log('[launchQueue] got file:', file.name, file.size, 'bytes');
       loadFile(file);
     } catch (e) {
-      console.warn('Failed to load launched file:', e);
+      console.error('[launchQueue] Failed:', e);
+      alert('Failed to load file: ' + e.message);
     }
   });
+  console.log('[launchQueue] consumer registered');
+} else {
+  console.log('[launchQueue] API not available');
 }
 </script>
 </body>
