@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CSV Viewer</title>
 <meta name="description" content="Lightweight CSV file viewer">
-<link rel="manifest" href="data:application/json;base64,ewogICJuYW1lIjogIkNTViBWaWV3ZXIiLAogICJzaG9ydF9uYW1lIjogIkNTViIsCiAgInN0YXJ0X3VybCI6ICIuIiwKICAiZGlzcGxheSI6ICJzdGFuZGFsb25lIiwKICAiYmFja2dyb3VuZF9jb2xvciI6ICIjMTIxMjE3IiwKICAidGhlbWVfY29sb3IiOiAiIzEyMTIxNyIsCiAgImljb25zIjogW10KfQ==">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#121217">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
@@ -122,8 +125,8 @@
   .resize-handle:hover, .resize-handle.dragging { background:var(--accent); }
 
   /* ─── Virtual rows ─── */
-  .vrow { display:flex; position:absolute; left:0; height:32px; }
-  .vcell { display:inline-flex; align-items:center; height:32px; border-right:1px solid var(--border); border-bottom:1px solid var(--border); padding:0 10px; font-size:13px; color:var(--text); cursor:cell; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; flex-shrink:0; }
+  .vrow { display:flex; position:absolute; left:0; min-height:32px; }
+  .vcell { display:inline-flex; align-items:center; min-height:32px; border-right:1px solid var(--border); border-bottom:1px solid var(--border); padding:0 10px; font-size:13px; color:var(--text); cursor:cell; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; flex-shrink:0; }
   .vcell.narrow { padding:0 3px; }
   .vcell-num { width:52px; min-width:52px; max-width:52px; justify-content:flex-end; padding:0 8px; color:var(--text-dim); font-size:11px; background:var(--header-bg); cursor:default; }
 
@@ -260,6 +263,8 @@ let data=[], headers=[], colFlowModes=[], colWidths=[];
 let sortCol=-1, sortDir='none', sortedIndices=null;
 let selRow=-1, selCol=-1, copiedTimer=null;
 const ROW_H = 32, BUFFER = 10, NARROW = 55;
+let rowHeights=null, rowOffsets=null; // dynamic row height tracking
+let hasWrap=false; // true if any column has wrap enabled
 
 const $=id=>document.getElementById(id);
 const app=$('app'), emptyState=$('empty-state'), dropOverlay=$('drop-overlay');
@@ -383,6 +388,12 @@ function setupHeaderEvents() {
       colFlowModes[ci] = next;
       btn.dataset.flow = next;
       btn.dataset.tip = FLOW_LABELS[next];
+      hasWrap = colFlowModes.some(m => m === 'wrap');
+      // Reset heights since wrap changes row sizes
+      rowHeights.fill(ROW_H);
+      rebuildOffsets();
+      updateSpacerHeight();
+      renderedStart = -1;
       renderVisibleRows(true);
     });
   });
@@ -416,6 +427,12 @@ function setupHeaderEvents() {
         }
         renderHeader();
         gridSpacer.style.width = getTotalWidth()+'px';
+        if (hasWrap) {
+          rowHeights.fill(ROW_H);
+          rebuildOffsets();
+          updateSpacerHeight();
+          renderedStart = -1;
+        }
         renderVisibleRows(true);
         repositionSelection();
       };
@@ -449,17 +466,52 @@ function doSort(ci, dir) {
     sortedIndices=idx; sortCol=ci; sortDir=dir;
   }
   renderHeader();
+  rowHeights.fill(ROW_H);
+  rebuildOffsets();
+  updateSpacerHeight();
   renderedStart=-1; renderedEnd=-1;
   renderVisibleRows(true);
   clearSelection();
 }
 
-// ─── Virtual Scrolling ───
+// ─── Virtual Scrolling with dynamic row heights ───
+function initRowHeights() {
+  rowHeights = new Float32Array(totalRows);
+  rowOffsets = new Float32Array(totalRows + 1);
+  rowHeights.fill(ROW_H);
+  rebuildOffsets();
+}
+
+function rebuildOffsets() {
+  rowOffsets[0] = 0;
+  for (let i = 0; i < totalRows; i++) {
+    rowOffsets[i + 1] = rowOffsets[i] + rowHeights[i];
+  }
+}
+
+function getTotalHeight() { return rowOffsets[totalRows]; }
+
+function updateSpacerHeight() {
+  gridSpacer.style.height = getTotalHeight() + 'px';
+}
+
+// Binary search: find first view index whose offset >= scrollTop
+function findStartIdx(scrollTop) {
+  let lo = 0, hi = totalRows;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (rowOffsets[mid + 1] <= scrollTop) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 function resetVirtualScroll() {
+  hasWrap = colFlowModes.some(m => m === 'wrap');
+  initRowHeights();
   const tw = getTotalWidth();
-  const th = ROW_H * totalRows;
   gridSpacer.style.width = tw + 'px';
-  gridSpacer.style.height = th + 'px';
+  updateSpacerHeight();
   gridBody.style.top = '0px';
   renderedStart = -1;
   renderedEnd = -1;
@@ -471,8 +523,11 @@ function resetVirtualScroll() {
 function renderVisibleRows(force) {
   const scrollTop = gridViewport.scrollTop;
   const viewH = gridViewport.clientHeight - 36;
-  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_H) - BUFFER);
-  const endIdx = Math.min(totalRows - 1, Math.ceil((scrollTop + viewH) / ROW_H) + BUFFER);
+
+  const startIdx = Math.max(0, findStartIdx(scrollTop) - BUFFER);
+  let endIdx = startIdx;
+  while (endIdx < totalRows - 1 && rowOffsets[endIdx] < scrollTop + viewH + BUFFER * ROW_H) endIdx++;
+  endIdx = Math.min(totalRows - 1, endIdx + BUFFER);
 
   if (!force && startIdx === renderedStart && endIdx === renderedEnd) return;
   renderedStart = startIdx;
@@ -485,8 +540,8 @@ function renderVisibleRows(force) {
   for (let vi = startIdx; vi <= endIdx; vi++) {
     const ri = dataRowAt(vi);
     const row = data[ri];
-    const top = vi * ROW_H;
-    let rowHTML = `<div class="vrow" style="top:${top}px;width:${tw}px">`;
+    const top = rowOffsets[vi];
+    let rowHTML = `<div class="vrow" data-vi="${vi}" style="top:${top}px;width:${tw}px">`;
     rowHTML += `<div class="vcell vcell-num">${ri+1}</div>`;
     for (let ci = 0; ci < row.length; ci++) {
       const fm = colFlowModes[ci];
@@ -505,6 +560,32 @@ function renderVisibleRows(force) {
     parts.push(rowHTML);
   }
   gridBody.innerHTML = parts.join('');
+
+  // Measure rendered rows and update heights if wrap is active
+  if (hasWrap) measureRenderedRows();
+}
+
+function measureRenderedRows() {
+  let changed = false;
+  const vrows = gridBody.children;
+  for (let i = 0; i < vrows.length; i++) {
+    const vrow = vrows[i];
+    const vi = +vrow.dataset.vi;
+    const measured = vrow.offsetHeight;
+    if (Math.abs(rowHeights[vi] - measured) > 1) {
+      rowHeights[vi] = measured;
+      changed = true;
+    }
+  }
+  if (changed) {
+    rebuildOffsets();
+    updateSpacerHeight();
+    // Reposition rows with updated offsets
+    for (let i = 0; i < vrows.length; i++) {
+      const vi = +vrows[i].dataset.vi;
+      vrows[i].style.top = rowOffsets[vi] + 'px';
+    }
+  }
 }
 
 function highlightText(text, query, isCurrent) {
@@ -598,11 +679,11 @@ document.addEventListener('keydown', e => {
   cellValue.textContent = data[nr][nc];
 
   // Scroll into view if needed
-  const targetTop = nv * ROW_H;
+  const targetTop = rowOffsets[nv];
   const viewTop = gridViewport.scrollTop;
   const viewH = gridViewport.clientHeight - 36;
   if (targetTop < viewTop) gridViewport.scrollTop = targetTop;
-  else if (targetTop + ROW_H > viewTop + viewH) gridViewport.scrollTop = targetTop + ROW_H - viewH;
+  else if (targetTop + (rowHeights[nv] || ROW_H) > viewTop + viewH) gridViewport.scrollTop = targetTop + (rowHeights[nv] || ROW_H) - viewH;
 
   // Scroll horizontally
   const colLeft = 52 + colWidths.slice(0, nc).reduce((a,b)=>a+b, 0);
@@ -686,10 +767,10 @@ function goToMatch() {
   cellValue.textContent = data[ri][ci];
 
   // Scroll to view index
-  const targetTop = vi * ROW_H;
+  const targetTop = rowOffsets[vi];
   const viewH = gridViewport.clientHeight - 36;
   const viewTop = gridViewport.scrollTop;
-  if (targetTop < viewTop || targetTop + ROW_H > viewTop + viewH) {
+  if (targetTop < viewTop || targetTop + (rowHeights[vi] || ROW_H) > viewTop + viewH) {
     gridViewport.scrollTop = Math.max(0, targetTop - viewH / 3);
   }
 
@@ -764,10 +845,10 @@ cellAddress.addEventListener('keydown', e => {
 
     const ord = getOrder();
     const vi = ord ? ord.indexOf(r) : r;
-    const targetTop = vi * ROW_H;
+    const targetTop = rowOffsets[vi];
     const viewH = gridViewport.clientHeight - 36;
     const viewTop = gridViewport.scrollTop;
-    if (targetTop < viewTop || targetTop + ROW_H > viewTop + viewH)
+    if (targetTop < viewTop || targetTop + (rowHeights[vi] || ROW_H) > viewTop + viewH)
       gridViewport.scrollTop = Math.max(0, targetTop - viewH / 3);
 
     const colLeft = 52 + colWidths.slice(0, c).reduce((a, b) => a + b, 0);
@@ -795,6 +876,13 @@ cellAddress.addEventListener('keydown', e => {
   }
 });
 cellAddress.addEventListener('focus', () => cellAddress.select());
+
+// ─── PWA: register service worker ───
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW registration failed:', err));
+  });
+}
 </script>
 </body>
 </html>
