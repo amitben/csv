@@ -883,6 +883,20 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW registration failed:', err));
   });
 }
+
+// ─── PWA: File Handling API - handle files opened via OS association ───
+if ('launchQueue' in window) {
+  launchQueue.setConsumer(async (launchParams) => {
+    if (!launchParams.files || !launchParams.files.length) return;
+    try {
+      const fileHandle = launchParams.files[0];
+      const file = await fileHandle.getFile();
+      loadFile(file);
+    } catch (e) {
+      console.warn('Failed to load launched file:', e);
+    }
+  });
+}
 </script>
 </body>
 </html>
