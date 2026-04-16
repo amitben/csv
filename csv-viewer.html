@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CSV Viewer</title>
+<meta name="description" content="Lightweight CSV file viewer">
+<link rel="manifest" href="data:application/json;base64,ewogICJuYW1lIjogIkNTViBWaWV3ZXIiLAogICJzaG9ydF9uYW1lIjogIkNTViIsCiAgInN0YXJ0X3VybCI6ICIuIiwKICAiZGlzcGxheSI6ICJzdGFuZGFsb25lIiwKICAiYmFja2dyb3VuZF9jb2xvciI6ICIjMTIxMjE3IiwKICAidGhlbWVfY29sb3IiOiAiIzEyMTIxNyIsCiAgImljb25zIjogW10KfQ==">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #121217;
+    --surface: #1a1a22;
+    --surface2: #22222e;
+    --border: #2a2a3a;
+    --border-hover: #3d3d55;
+    --text: #e0e0e8;
+    --text-dim: #8888a0;
+    --accent: #6c8aff;
+    --accent-border: rgba(108, 138, 255, 0.25);
+    --header-bg: #1e1e2a;
+    --selected-bg: rgba(108, 138, 255, 0.12);
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --rh: 32;
+    --header-height: 36px;
+    --preview-height: 72px;
+  }
+  html, body { height:100%; width:100%; overflow:hidden; background:var(--bg); color:var(--text); font-family:var(--font-mono); font-size:13px; }
+
+  /* ─── Drop overlay ─── */
+  #drop-overlay { position:fixed; inset:0; background:rgba(12,12,18,0.85); backdrop-filter:blur(8px); z-index:1000; display:none; align-items:center; justify-content:center; pointer-events:none; }
+  #drop-overlay.active { display:flex; }
+  #drop-overlay .drop-box { border:2px dashed var(--accent); border-radius:16px; padding:48px 64px; text-align:center; color:var(--accent); font-family:var(--font-sans); font-size:18px; font-weight:500; }
+  #drop-overlay .drop-box .icon { font-size:40px; margin-bottom:12px; opacity:0.7; }
+
+  /* ─── Empty state ─── */
+  #empty-state { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:16px; color:var(--text-dim); font-family:var(--font-sans); }
+  #empty-state .icon { font-size:48px; opacity:0.3; }
+  #empty-state .title { font-size:16px; font-weight:500; color:var(--text); opacity:0.6; }
+  #empty-state .subtitle { font-size:13px; opacity:0.5; }
+  #empty-state.hidden { display:none; }
+  .empty-check { margin-top:4px; font-family:var(--font-sans); }
+
+  /* ─── App layout ─── */
+  #app { display:none; flex-direction:column; height:100vh; width:100vw; }
+  #app.active { display:flex; }
+
+  /* ─── Top bar ─── */
+  #top-bar { flex-shrink:0; background:var(--surface); border-bottom:1px solid var(--border); }
+  #file-info { display:flex; align-items:center; gap:16px; padding:6px 12px; font-family:var(--font-sans); font-size:12px; color:var(--text-dim); border-bottom:1px solid var(--border); }
+  #file-info .filename { color:var(--text); font-weight:600; font-size:13px; }
+  #file-info .stat { opacity:0.7; }
+  #cell-preview { display:flex; align-items:flex-start; gap:8px; padding:6px 12px; }
+  #cell-address { flex-shrink:0; background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:4px 10px; font-size:12px; color:var(--accent); font-weight:600; min-width:56px; width:72px; text-align:center; font-family:var(--font-mono); line-height:1.5; outline:none; }
+  #cell-address:focus { border-color:var(--accent); background:var(--bg); }
+  #cell-value { flex:1; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:4px 10px; font-size:13px; color:var(--text); font-family:var(--font-mono); line-height:1.5; overflow-y:auto; max-height:var(--preview-height); white-space:pre-wrap; word-break:break-all; resize:vertical; min-height:calc(1.5em + 10px); }
+  #cell-value:empty { max-height:calc(1.5em + 10px); }
+
+  /* ─── Checkbox group ─── */
+  .toolbar-checks { display:flex; align-items:center; gap:14px; margin-left:auto; flex-shrink:0; }
+  .toolbar-check { display:flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; color:var(--text-dim); user-select:none; }
+  .toolbar-check:hover { color:var(--text); }
+  .toolbar-check input { display:none; }
+  .check-box { width:14px; height:14px; border:1.5px solid var(--border-hover); border-radius:3px; position:relative; }
+  .toolbar-check input:checked ~ .check-box { background:var(--accent); border-color:var(--accent); }
+  .check-box::after { content:''; position:absolute; left:3.5px; top:1px; width:4px; height:7px; border:solid var(--bg); border-width:0 1.5px 1.5px 0; transform:rotate(40deg); opacity:0; }
+  .toolbar-check input:checked ~ .check-box::after { opacity:1; }
+
+  /* ─── Search bar ─── */
+  #search-bar { display:flex; align-items:center; gap:6px; padding:4px 12px; border-bottom:1px solid var(--border); background:var(--surface); }
+  #search-bar.hidden { display:none; }
+  .search-icon { display:flex; align-items:center; color:var(--text-dim); flex-shrink:0; }
+  #search-input { flex:1; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:4px 8px; font-family:var(--font-mono); font-size:13px; color:var(--text); outline:none; min-width:100px; max-width:300px; }
+  #search-input:focus { border-color:var(--accent); }
+  #search-count { font-family:var(--font-sans); font-size:11px; color:var(--text-dim); white-space:nowrap; min-width:60px; }
+  .search-nav { background:none; border:1px solid var(--border); border-radius:3px; color:var(--text-dim); font-size:10px; width:24px; height:24px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  .search-nav:hover { background:rgba(255,255,255,0.06); color:var(--text); }
+
+  /* ─── Search highlight in cells ─── */
+  .vcell mark { background:rgba(255,200,0,0.3); color:inherit; border-radius:1px; }
+  .vcell mark.current { background:rgba(255,200,0,0.7); color:var(--bg); }
+
+  /* ─── Copied tooltip ─── */
+  #copied-tip { position:fixed; pointer-events:none; background:var(--surface2); border:1px solid var(--accent-border); color:var(--accent); font-family:var(--font-mono); font-size:11px; padding:2px 8px; border-radius:4px; opacity:0; z-index:1000; white-space:nowrap; }
+  #copied-tip.show { opacity:1; }
+
+  /* ─── Grid viewport ─── */
+  #grid-viewport { flex:1; overflow:auto; position:relative; }
+  #grid-header { position:sticky; top:0; z-index:10; display:flex; background:var(--header-bg); border-bottom:1px solid var(--border); flex-shrink:0; }
+  #grid-spacer { position:relative; }
+  #grid-body { position:absolute; left:0; right:0; will-change:transform; }
+
+  /* ─── Header cells ─── */
+  .hcell { display:inline-flex; align-items:center; height:var(--header-height); border-right:1px solid var(--border); font-weight:600; font-size:12px; color:var(--text); position:relative; user-select:none; cursor:default; letter-spacing:0.02em; overflow:hidden; flex-shrink:0; }
+  .hcell-inner { display:flex; align-items:center; width:100%; height:100%; padding:0 6px 0 10px; overflow:hidden; position:relative; }
+  .hcell-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .hcell.narrow .hcell-inner { padding:0 3px; }
+
+  /* ─── Row number header ─── */
+  .hcell-num { width:52px; min-width:52px; max-width:52px; justify-content:flex-end; padding-right:8px; color:var(--text-dim); font-size:11px; }
+
+  /* ─── Header actions ─── */
+  .th-actions { display:flex; align-items:center; gap:1px; position:absolute; right:6px; top:0; bottom:0; opacity:0; pointer-events:none; background:var(--header-bg); padding-left:4px; }
+  .hcell:hover .th-actions { opacity:1; pointer-events:auto; }
+  .th-actions.has-sort { opacity:1; pointer-events:auto; }
+  .flow-btn, .sort-btn { flex-shrink:0; width:22px; height:22px; border:none; background:transparent; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; opacity:0.35; position:relative; }
+  .flow-btn:hover, .sort-btn:hover { opacity:1; background:rgba(255,255,255,0.08); }
+  .sort-btn.active { opacity:0.9; }
+  .flow-btn svg, .sort-btn svg { width:14px; height:14px; }
+  .flow-btn .flow-icon { display:none; }
+  .flow-btn[data-flow="hidden"] .icon-hidden { display:flex; }
+  .flow-btn[data-flow="wrap"] .icon-wrap { display:flex; }
+  .flow-btn[data-flow="visible"] .icon-visible { display:flex; }
+  .flow-btn::after, .sort-btn::after { content:attr(data-tip); position:absolute; bottom:-24px; left:50%; transform:translateX(-50%); background:#333; color:#eee; font-size:10px; font-family:var(--font-sans); font-weight:400; padding:2px 6px; border-radius:3px; white-space:nowrap; pointer-events:none; opacity:0; z-index:100; }
+  .flow-btn:hover::after, .sort-btn:hover::after { opacity:1; }
+
+  /* ─── Resize handle ─── */
+  .resize-handle { position:absolute; right:0; top:0; bottom:0; width:5px; cursor:col-resize; background:transparent; z-index:2; }
+  .resize-handle:hover, .resize-handle.dragging { background:var(--accent); }
+
+  /* ─── Virtual rows ─── */
+  .vrow { display:flex; position:absolute; left:0; height:32px; }
+  .vcell { display:inline-flex; align-items:center; height:32px; border-right:1px solid var(--border); border-bottom:1px solid var(--border); padding:0 10px; font-size:13px; color:var(--text); cursor:cell; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; flex-shrink:0; }
+  .vcell.narrow { padding:0 3px; }
+  .vcell-num { width:52px; min-width:52px; max-width:52px; justify-content:flex-end; padding:0 8px; color:var(--text-dim); font-size:11px; background:var(--header-bg); cursor:default; }
+
+  /* Flow modes */
+  .vcell.flow-wrap { white-space:pre-wrap; word-break:break-word; overflow:hidden; height:auto; min-height:32px; max-height:120px; overflow-y:auto; }
+  .vcell.flow-visible { white-space:nowrap; overflow:visible; text-overflow:unset; position:relative; z-index:2; }
+
+  /* ─── Selection overlay ─── */
+  #sel-overlay { display:none; position:absolute; border:2px solid var(--accent); background:var(--selected-bg); pointer-events:none; z-index:3; }
+
+  /* ─── Resize guide ─── */
+  #resize-guide { display:none; position:fixed; top:0; bottom:0; width:2px; background:var(--accent); opacity:0.7; z-index:1000; pointer-events:none; }
+  #resize-guide.active { display:block; }
+  #resize-guide::after { content:attr(data-width); position:absolute; top:8px; left:8px; background:var(--surface2); border:1px solid var(--accent-border); color:var(--accent); font-family:var(--font-mono); font-size:11px; padding:2px 6px; border-radius:3px; white-space:nowrap; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-track { background:var(--bg); }
+  ::-webkit-scrollbar-thumb { background:var(--border); border-radius:5px; }
+  ::-webkit-scrollbar-thumb:hover { background:var(--border-hover); }
+  ::-webkit-scrollbar-corner { background:var(--bg); }
+</style>
+</head>
+<body>
+
+<div id="copied-tip">Copied</div>
+<div id="resize-guide"></div>
+
+<div id="drop-overlay">
+  <div class="drop-box">
+    <div class="icon">⬇</div>
+    <div>Drop CSV file here</div>
+  </div>
+</div>
+
+<div id="empty-state">
+  <div class="icon">📄</div>
+  <div class="title">CSV Viewer</div>
+  <div class="subtitle">Drag & drop a .csv file anywhere to open</div>
+  <label class="toolbar-check empty-check">
+    <input type="checkbox" id="has-header-cb" checked>
+    <span class="check-box"></span>
+    <span>File has header</span>
+  </label>
+</div>
+
+<div id="app">
+  <div id="top-bar">
+    <div id="file-info">
+      <span class="filename" id="fname">—</span>
+      <span class="stat" id="frows"></span>
+      <span class="stat" id="fcols"></span>
+      <span class="stat" id="fsize"></span>
+      <div class="toolbar-checks">
+        <label class="toolbar-check">
+          <input type="checkbox" id="auto-copy-cb" checked>
+          <span class="check-box"></span>
+          <span>Auto-copy</span>
+        </label>
+        <label class="toolbar-check">
+          <input type="checkbox" id="resize-all-cb">
+          <span class="check-box"></span>
+          <span>Resize all</span>
+        </label>
+      </div>
+    </div>
+    <div id="search-bar">
+      <div class="search-icon"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14" y2="14"/></svg></div>
+      <input type="text" id="search-input" placeholder="Search… (Ctrl+F)" spellcheck="false" autocomplete="off">
+      <span id="search-count"></span>
+      <button class="search-nav" id="search-prev" title="Previous">▲</button>
+      <button class="search-nav" id="search-next" title="Next">▼</button>
+      <button class="search-nav" id="search-close" title="Close">✕</button>
+    </div>
+    <div id="cell-preview">
+      <input type="text" id="cell-address" value="—" spellcheck="false" autocomplete="off">
+      <div id="cell-value"></div>
+    </div>
+  </div>
+  <div id="grid-viewport">
+    <div id="grid-header"></div>
+    <div id="grid-spacer">
+      <div id="grid-body"></div>
+      <div id="sel-overlay"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── Icons ───
+const FLOW_ICONS = {
+  hidden: `<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" color="#8888a0"><line x1="1" y1="7" x2="8.5" y2="7"/><circle cx="10.5" cy="7" r="0.6" fill="currentColor" stroke="none"/><circle cx="12.5" cy="7" r="0.6" fill="currentColor" stroke="none"/></svg>`,
+  wrap: `<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" color="#8888a0"><polyline points="1,4 12,4 12,7 5,7"/><polyline points="7,5.2 5,7 7,8.8"/><line x1="1" y1="10" x2="9" y2="10"/></svg>`,
+  visible: `<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" color="#8888a0"><line x1="0" y1="7" x2="14" y2="7"/><polyline points="11.5,5 13.5,7 11.5,9" stroke-width="1.2"/></svg>`
+};
+const FLOW_MODES = ['hidden', 'wrap', 'visible'];
+const FLOW_LABELS = { hidden: 'Overflow Hidden', wrap: 'Wrap Text', visible: 'Overflow Visible' };
+const SORT_ICONS = {
+  none: `<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" color="#8888a0"><polyline points="4,5.5 7,2.5 10,5.5"/><polyline points="4,8.5 7,11.5 10,8.5"/></svg>`,
+  asc: `<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" color="#6c8aff"><polyline points="4,8.5 7,5 10,8.5"/></svg>`,
+  desc: `<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" color="#6c8aff"><polyline points="4,5.5 7,9 10,5.5"/></svg>`
+};
+const SORT_MODES = ['none', 'asc', 'desc'];
+const SORT_LABELS = { none: 'Sort', asc: 'Sorted A→Z / 0→9', desc: 'Sorted Z→A / 9→0' };
+
+// ─── CSV Parser ───
+function parseCSV(text) {
+  const rows = []; let i = 0, len = text.length;
+  while (i < len) {
+    const row = [];
+    while (i < len) {
+      let v = '';
+      if (text[i] === '"') {
+        i++;
+        while (i < len) { if (text[i] === '"') { if (i+1<len&&text[i+1]==='"'){v+='"';i+=2;}else{i++;break;} } else { v+=text[i]; i++; } }
+      } else {
+        while (i<len&&text[i]!==','&&text[i]!=='\r'&&text[i]!=='\n'){v+=text[i];i++;}
+      }
+      row.push(v);
+      if (i<len&&text[i]===',') i++; else break;
+    }
+    if (i<len&&text[i]==='\r') i++;
+    if (i<len&&text[i]==='\n') i++;
+    if (row.length>1||(row.length===1&&row[0]!=='')) rows.push(row);
+  }
+  return rows;
+}
+function colName(idx) { let n='',i=idx; while(i>=0){n=String.fromCharCode(65+(i%26))+n;i=Math.floor(i/26)-1;} return n; }
+function escapeHTML(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function formatSize(b) { if(b<1024) return b+' B'; if(b<1048576) return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
+
+// ─── State ───
+let data=[], headers=[], colFlowModes=[], colWidths=[];
+let sortCol=-1, sortDir='none', sortedIndices=null;
+let selRow=-1, selCol=-1, copiedTimer=null;
+const ROW_H = 32, BUFFER = 10, NARROW = 55;
+
+const $=id=>document.getElementById(id);
+const app=$('app'), emptyState=$('empty-state'), dropOverlay=$('drop-overlay');
+const gridViewport=$('grid-viewport'), gridSpacer=$('grid-spacer');
+const gridHeader=$('grid-header'), gridBody=$('grid-body');
+const cellAddress=$('cell-address'), cellValue=$('cell-value');
+const fnameEl=$('fname'), frowsEl=$('frows'), fcolsEl=$('fcols'), fsizeEl=$('fsize');
+const selOverlay=$('sel-overlay'), copiedTip=$('copied-tip');
+const autoCopyCb=$('auto-copy-cb');
+
+// Reusable clipboard textarea
+const clipTA=document.createElement('textarea');
+clipTA.style.cssText='position:fixed;left:-9999px;top:-9999px;opacity:0';
+document.body.appendChild(clipTA);
+
+// ─── Virtual scroll state ───
+let visibleRows=[], renderedStart=-1, renderedEnd=-1;
+let totalRows=0;
+
+function getOrder() { return sortedIndices || null; }
+function dataRowAt(viewIdx) {
+  const ord = getOrder();
+  return ord ? ord[viewIdx] : viewIdx;
+}
+
+// ─── Drag & Drop ───
+let dragCounter=0;
+document.addEventListener('dragenter', e=>{e.preventDefault();dragCounter++;dropOverlay.classList.add('active');});
+document.addEventListener('dragleave', e=>{e.preventDefault();dragCounter--;if(dragCounter<=0){dragCounter=0;dropOverlay.classList.remove('active');}});
+document.addEventListener('dragover', e=>e.preventDefault());
+document.addEventListener('drop', e=>{
+  e.preventDefault(); dragCounter=0; dropOverlay.classList.remove('active');
+  if(e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+
+// ─── Load file ───
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const rows = parseCSV(ev.target.result);
+    if (!rows.length) return;
+    const hasHeader = $('has-header-cb').checked;
+    if (hasHeader) { headers=rows[0]; data=rows.slice(1); }
+    else { const nc=Math.max(...rows.map(r=>r.length)); headers=Array.from({length:nc},(_,i)=>colName(i)); data=rows; }
+    const maxCols=Math.max(headers.length,...data.map(r=>r.length));
+    while(headers.length<maxCols) headers.push(colName(headers.length));
+    data.forEach(r=>{while(r.length<maxCols)r.push('');});
+    colFlowModes=new Array(headers.length).fill('hidden');
+    sortCol=-1; sortDir='none'; sortedIndices=null;
+    totalRows=data.length;
+    fnameEl.textContent=file.name;
+    frowsEl.textContent=totalRows.toLocaleString()+' rows';
+    fcolsEl.textContent=headers.length+' cols';
+    fsizeEl.textContent=formatSize(file.size);
+    emptyState.classList.add('hidden');
+    app.classList.add('active');
+    computeColWidths();
+    renderHeader();
+    resetVirtualScroll();
+    clearSelection();
+  };
+  reader.readAsText(file);
+}
+
+function computeColWidths() {
+  const containerW = gridViewport.clientWidth || window.innerWidth;
+  const maxColW = Math.floor(containerW * 0.18);
+  const sampleN = Math.min(data.length, 100);
+  colWidths = headers.map((h, ci) => {
+    let mx = h.length;
+    for (let ri=0; ri<sampleN; ri++) mx = Math.max(mx, (data[ri][ci]||'').length);
+    return Math.max(60, Math.min(maxColW, mx*8+20));
+  });
+}
+
+function getTotalWidth() { return 52 + colWidths.reduce((a,b)=>a+b,0); }
+
+// ─── Header ───
+function renderHeader() {
+  let html = '<div class="hcell hcell-num">#</div>';
+  headers.forEach((h, ci) => {
+    const mode = colFlowModes[ci];
+    const sDir = (sortCol===ci)?sortDir:'none';
+    const sActive = sDir!=='none'?' active':'';
+    const hasSort = sDir!=='none'?' has-sort':'';
+    const narrow = colWidths[ci]<=NARROW?' narrow':'';
+    html += `<div class="hcell${narrow}" style="width:${colWidths[ci]}px" data-col="${ci}">`;
+    html += `<div class="hcell-inner"><span class="hcell-label">${escapeHTML(h||colName(ci))}</span>`;
+    html += `<div class="th-actions${hasSort}">`;
+    html += `<button class="sort-btn${sActive}" data-col="${ci}" data-tip="${SORT_LABELS[sDir]}">${SORT_ICONS[sDir]}</button>`;
+    html += `<button class="flow-btn" data-col="${ci}" data-flow="${mode}" data-tip="${FLOW_LABELS[mode]}">`;
+    html += `<span class="flow-icon icon-hidden">${FLOW_ICONS.hidden}</span>`;
+    html += `<span class="flow-icon icon-wrap">${FLOW_ICONS.wrap}</span>`;
+    html += `<span class="flow-icon icon-visible">${FLOW_ICONS.visible}</span>`;
+    html += `</button></div></div>`;
+    html += `<div class="resize-handle" data-col="${ci}"></div></div>`;
+  });
+  gridHeader.innerHTML = html;
+  gridHeader.style.width = getTotalWidth() + 'px';
+  setupHeaderEvents();
+}
+
+function setupHeaderEvents() {
+  // Sort
+  gridHeader.querySelectorAll('.sort-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const ci = +btn.dataset.col;
+      let nd;
+      if (sortCol===ci) { nd = SORT_MODES[(SORT_MODES.indexOf(sortDir)+1)%3]; }
+      else { nd = 'asc'; }
+      doSort(ci, nd);
+    });
+  });
+  // Flow
+  gridHeader.querySelectorAll('.flow-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const ci = +btn.dataset.col;
+      const next = FLOW_MODES[(FLOW_MODES.indexOf(colFlowModes[ci])+1)%3];
+      colFlowModes[ci] = next;
+      btn.dataset.flow = next;
+      btn.dataset.tip = FLOW_LABELS[next];
+      renderVisibleRows(true);
+    });
+  });
+  // Resize
+  const guide = $('resize-guide');
+  gridHeader.querySelectorAll('.resize-handle').forEach(handle => {
+    handle.addEventListener('mousedown', e => {
+      e.preventDefault(); e.stopPropagation();
+      const ci = +handle.dataset.col;
+      const hcell = handle.parentElement;
+      const startX = e.clientX, startW = colWidths[ci];
+      let currentW = startW;
+      handle.classList.add('dragging');
+      guide.style.left = e.clientX+'px';
+      guide.dataset.width = startW+'px';
+      guide.classList.add('active');
+      const onMove = ev => {
+        currentW = Math.max(40, startW + ev.clientX - startX);
+        guide.style.left = ev.clientX+'px';
+        guide.dataset.width = currentW+'px';
+      };
+      const onUp = () => {
+        handle.classList.remove('dragging');
+        guide.classList.remove('active');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        if ($('resize-all-cb').checked) {
+          for (let i=0;i<colWidths.length;i++) colWidths[i]=currentW;
+        } else {
+          colWidths[ci]=currentW;
+        }
+        renderHeader();
+        gridSpacer.style.width = getTotalWidth()+'px';
+        renderVisibleRows(true);
+        repositionSelection();
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+  // Header tooltips
+  gridHeader.querySelectorAll('.hcell-label').forEach(label => {
+    label.addEventListener('mouseenter', () => {
+      label.title = label.scrollWidth > label.clientWidth ? label.textContent : '';
+    });
+  });
+}
+
+// ─── Sort ───
+function isNumericColumn(ci) {
+  const sN=Math.min(data.length,200); let nc=0,ne=0;
+  for(let i=0;i<sN;i++){const v=data[i][ci].trim();if(!v)continue;ne++;if(!isNaN(v))nc++;}
+  return ne>0&&(nc/ne)>=0.8;
+}
+function doSort(ci, dir) {
+  if(dir==='none'){sortedIndices=null;sortCol=-1;sortDir='none';}
+  else {
+    const num=isNumericColumn(ci), idx=data.map((_,i)=>i), m=dir==='asc'?1:-1;
+    idx.sort((a,b)=>{
+      const va=data[a][ci],vb=data[b][ci];
+      if(num){const na=parseFloat(va),nb=parseFloat(vb),aO=!isNaN(na),bO=!isNaN(nb);if(!aO&&!bO)return 0;if(!aO)return 1;if(!bO)return -1;return(na-nb)*m;}
+      return va.localeCompare(vb,undefined,{sensitivity:'base'})*m;
+    });
+    sortedIndices=idx; sortCol=ci; sortDir=dir;
+  }
+  renderHeader();
+  renderedStart=-1; renderedEnd=-1;
+  renderVisibleRows(true);
+  clearSelection();
+}
+
+// ─── Virtual Scrolling ───
+function resetVirtualScroll() {
+  const tw = getTotalWidth();
+  const th = ROW_H * totalRows;
+  gridSpacer.style.width = tw + 'px';
+  gridSpacer.style.height = th + 'px';
+  gridBody.style.top = '0px';
+  renderedStart = -1;
+  renderedEnd = -1;
+  gridViewport.scrollTop = 0;
+  gridViewport.scrollLeft = 0;
+  renderVisibleRows(true);
+}
+
+function renderVisibleRows(force) {
+  const scrollTop = gridViewport.scrollTop;
+  const viewH = gridViewport.clientHeight - 36;
+  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_H) - BUFFER);
+  const endIdx = Math.min(totalRows - 1, Math.ceil((scrollTop + viewH) / ROW_H) + BUFFER);
+
+  if (!force && startIdx === renderedStart && endIdx === renderedEnd) return;
+  renderedStart = startIdx;
+  renderedEnd = endIdx;
+
+  const tw = getTotalWidth();
+  const sq = searchQuery;
+  const curMatch = searchMatches[searchIdx];
+  const parts = [];
+  for (let vi = startIdx; vi <= endIdx; vi++) {
+    const ri = dataRowAt(vi);
+    const row = data[ri];
+    const top = vi * ROW_H;
+    let rowHTML = `<div class="vrow" style="top:${top}px;width:${tw}px">`;
+    rowHTML += `<div class="vcell vcell-num">${ri+1}</div>`;
+    for (let ci = 0; ci < row.length; ci++) {
+      const fm = colFlowModes[ci];
+      const nrw = colWidths[ci] <= NARROW ? ' narrow' : '';
+      const cls = fm === 'hidden' ? '' : ' flow-'+fm;
+      let cellHTML;
+      if (sq && row[ci].toLowerCase().indexOf(sq) !== -1) {
+        const isCurrent = curMatch && curMatch[0] === ri && curMatch[1] === ci;
+        cellHTML = '<span>' + highlightText(row[ci], sq, isCurrent) + '</span>';
+      } else {
+        cellHTML = escapeHTML(row[ci]);
+      }
+      rowHTML += `<div class="vcell${cls}${nrw}" style="width:${colWidths[ci]}px" data-r="${ri}" data-c="${ci}">${cellHTML}</div>`;
+    }
+    rowHTML += '</div>';
+    parts.push(rowHTML);
+  }
+  gridBody.innerHTML = parts.join('');
+}
+
+function highlightText(text, query, isCurrent) {
+  const lower = text.toLowerCase();
+  let result = '', lastIdx = 0, pos;
+  while ((pos = lower.indexOf(query, lastIdx)) !== -1) {
+    result += escapeHTML(text.slice(lastIdx, pos));
+    const cls = isCurrent ? ' class="current"' : '';
+    result += `<mark${cls}>${escapeHTML(text.slice(pos, pos + query.length))}</mark>`;
+    lastIdx = pos + query.length;
+  }
+  result += escapeHTML(text.slice(lastIdx));
+  return result;
+}
+
+gridViewport.addEventListener('scroll', () => {
+  renderVisibleRows(false);
+  repositionSelection();
+}, { passive: true });
+
+// ─── Selection ───
+gridBody.addEventListener('click', e => {
+  let el = e.target;
+  if (!el.dataset.r) el = el.parentElement;
+  if (!el || !el.dataset.r) return;
+  const r = +el.dataset.r, c = +el.dataset.c;
+  selRow = r; selCol = c;
+
+  // Position overlay using the clicked element's offset
+  const top = el.parentElement.offsetTop + gridBody.offsetTop;
+  const left = el.offsetLeft;
+  selOverlay.style.cssText = 'display:block;left:'+left+'px;top:'+top+'px;width:'+el.offsetWidth+'px;height:'+el.offsetHeight+'px';
+
+  cellAddress.value = colName(c) + (r+1);
+  cellValue.textContent = data[r][c];
+
+  if (autoCopyCb.checked) {
+    clipTA.value = data[r][c];
+    clipTA.select();
+    try { document.execCommand('copy'); } catch(ex) {}
+    showCopiedTip(e.clientX, e.clientY);
+  }
+});
+
+function repositionSelection() {
+  if (selRow < 0) return;
+  // Find the rendered cell
+  const cell = gridBody.querySelector(`[data-r="${selRow}"][data-c="${selCol}"]`);
+  if (cell) {
+    const top = cell.parentElement.offsetTop + gridBody.offsetTop;
+    selOverlay.style.cssText = 'display:block;left:'+cell.offsetLeft+'px;top:'+top+'px;width:'+cell.offsetWidth+'px;height:'+cell.offsetHeight+'px';
+  } else {
+    selOverlay.style.display = 'none';
+  }
+}
+
+function showCopiedTip(x, y) {
+  if (copiedTimer) clearTimeout(copiedTimer);
+  copiedTip.style.left = (x+12)+'px';
+  copiedTip.style.top = (y-10)+'px';
+  copiedTip.classList.add('show');
+  copiedTimer = setTimeout(() => copiedTip.classList.remove('show'), 600);
+}
+
+function clearSelection() {
+  selRow=-1; selCol=-1;
+  selOverlay.style.display='none';
+  cellAddress.value='—';
+  cellValue.textContent='';
+}
+
+// ─── Keyboard nav ───
+document.addEventListener('keydown', e => {
+  if (selRow < 0) return;
+  // Find current view index
+  const ord = getOrder();
+  let viewIdx = ord ? ord.indexOf(selRow) : selRow;
+  let nr = selRow, nc = selCol, nv = viewIdx;
+  switch (e.key) {
+    case 'ArrowUp': nv = Math.max(0, viewIdx-1); break;
+    case 'ArrowDown': nv = Math.min(totalRows-1, viewIdx+1); break;
+    case 'ArrowLeft': nc = Math.max(0, selCol-1); break;
+    case 'ArrowRight': nc = Math.min(headers.length-1, selCol+1); break;
+    case 'Tab': e.preventDefault(); nc = e.shiftKey ? Math.max(0,selCol-1) : Math.min(headers.length-1,selCol+1); break;
+    default: return;
+  }
+  e.preventDefault();
+  nr = dataRowAt(nv);
+  selRow = nr; selCol = nc;
+  cellAddress.value = colName(nc) + (nr+1);
+  cellValue.textContent = data[nr][nc];
+
+  // Scroll into view if needed
+  const targetTop = nv * ROW_H;
+  const viewTop = gridViewport.scrollTop;
+  const viewH = gridViewport.clientHeight - 36;
+  if (targetTop < viewTop) gridViewport.scrollTop = targetTop;
+  else if (targetTop + ROW_H > viewTop + viewH) gridViewport.scrollTop = targetTop + ROW_H - viewH;
+
+  // Scroll horizontally
+  const colLeft = 52 + colWidths.slice(0, nc).reduce((a,b)=>a+b, 0);
+  const colRight = colLeft + colWidths[nc];
+  const viewLeft = gridViewport.scrollLeft;
+  const viewW = gridViewport.clientWidth;
+  if (colLeft < viewLeft) gridViewport.scrollLeft = colLeft;
+  else if (colRight > viewLeft + viewW) gridViewport.scrollLeft = colRight - viewW;
+
+  renderVisibleRows(false);
+  repositionSelection();
+
+  if (autoCopyCb.checked) {
+    clipTA.value = data[nr][nc];
+    clipTA.select();
+    try { document.execCommand('copy'); } catch(ex) {}
+  }
+});
+
+// ─── Search ───
+let searchQuery = '', searchMatches = [], searchIdx = -1;
+const searchBar = $('search-bar');
+const searchInput = $('search-input');
+const searchCount = $('search-count');
+searchBar.classList.add('hidden');
+
+function openSearch() {
+  searchBar.classList.remove('hidden');
+  searchInput.focus();
+  searchInput.select();
+}
+function closeSearch() {
+  searchBar.classList.add('hidden');
+  searchQuery = '';
+  searchMatches = [];
+  searchIdx = -1;
+  searchCount.textContent = '';
+  renderVisibleRows(true);
+}
+
+function runSearch() {
+  const q = searchInput.value.toLowerCase().trim();
+  if (q === searchQuery) return;
+  searchQuery = q;
+  searchMatches = [];
+  searchIdx = -1;
+  if (!q) {
+    searchCount.textContent = '';
+    renderVisibleRows(true);
+    return;
+  }
+  // Build match list: [dataRowIdx, colIdx] in view order
+  const ord = getOrder();
+  for (let vi = 0; vi < totalRows; vi++) {
+    const ri = ord ? ord[vi] : vi;
+    const row = data[ri];
+    for (let ci = 0; ci < row.length; ci++) {
+      if (row[ci].toLowerCase().indexOf(q) !== -1) {
+        searchMatches.push([ri, ci, vi]);
+      }
+    }
+  }
+  searchCount.textContent = searchMatches.length ? `${searchMatches.length} found` : 'No results';
+  if (searchMatches.length) {
+    searchIdx = 0;
+    goToMatch();
+  } else {
+    renderVisibleRows(true);
+  }
+}
+
+function goToMatch() {
+  if (!searchMatches.length) return;
+  const m = searchMatches[searchIdx];
+  const ri = m[0], ci = m[1], vi = m[2];
+  searchCount.textContent = `${searchIdx+1} / ${searchMatches.length}`;
+
+  // Select the cell (no copy during search)
+  selRow = ri; selCol = ci;
+  cellAddress.value = colName(ci) + (ri+1);
+  cellValue.textContent = data[ri][ci];
+
+  // Scroll to view index
+  const targetTop = vi * ROW_H;
+  const viewH = gridViewport.clientHeight - 36;
+  const viewTop = gridViewport.scrollTop;
+  if (targetTop < viewTop || targetTop + ROW_H > viewTop + viewH) {
+    gridViewport.scrollTop = Math.max(0, targetTop - viewH / 3);
+  }
+
+  // Horizontal scroll
+  const colLeft = 52 + colWidths.slice(0, ci).reduce((a,b)=>a+b, 0);
+  const colRight = colLeft + colWidths[ci];
+  const viewLeft = gridViewport.scrollLeft;
+  const viewW = gridViewport.clientWidth;
+  if (colLeft < viewLeft) gridViewport.scrollLeft = colLeft;
+  else if (colRight > viewLeft + viewW) gridViewport.scrollLeft = colRight - viewW;
+
+  renderVisibleRows(true);
+  repositionSelection();
+
+  // Keep focus in search input
+  searchInput.focus();
+}
+
+function searchNext() {
+  if (!searchMatches.length) return;
+  searchIdx = (searchIdx + 1) % searchMatches.length;
+  goToMatch();
+}
+function searchPrev() {
+  if (!searchMatches.length) return;
+  searchIdx = (searchIdx - 1 + searchMatches.length) % searchMatches.length;
+  goToMatch();
+}
+
+let searchDebounce = null;
+searchInput.addEventListener('input', () => {
+  if (searchDebounce) clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(runSearch, 150);
+});
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? searchPrev() : searchNext(); }
+  if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
+});
+$('search-next').addEventListener('click', searchNext);
+$('search-prev').addEventListener('click', searchPrev);
+$('search-close').addEventListener('click', closeSearch);
+
+// Ctrl+F / Cmd+F to open search
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    e.preventDefault();
+    openSearch();
+  }
+});
+// ─── Address navigation ───
+function parseAddress(addr) {
+  const m = addr.trim().toUpperCase().match(/^([A-Z]+)(\d+)$/);
+  if (!m) return null;
+  let col = 0;
+  for (let i = 0; i < m[1].length; i++) col = col * 26 + (m[1].charCodeAt(i) - 64);
+  col -= 1;
+  const row = parseInt(m[2]) - 1;
+  return { row, col };
+}
+
+cellAddress.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const parsed = parseAddress(cellAddress.value);
+    if (!parsed) return;
+    const { row: r, col: c } = parsed;
+    if (r < 0 || r >= data.length || c < 0 || c >= headers.length) return;
+
+    selRow = r; selCol = c;
+    cellAddress.value = colName(c) + (r + 1);
+    cellValue.textContent = data[r][c];
+
+    const ord = getOrder();
+    const vi = ord ? ord.indexOf(r) : r;
+    const targetTop = vi * ROW_H;
+    const viewH = gridViewport.clientHeight - 36;
+    const viewTop = gridViewport.scrollTop;
+    if (targetTop < viewTop || targetTop + ROW_H > viewTop + viewH)
+      gridViewport.scrollTop = Math.max(0, targetTop - viewH / 3);
+
+    const colLeft = 52 + colWidths.slice(0, c).reduce((a, b) => a + b, 0);
+    const colRight = colLeft + colWidths[c];
+    const viewLeft = gridViewport.scrollLeft;
+    const viewW = gridViewport.clientWidth;
+    if (colLeft < viewLeft) gridViewport.scrollLeft = colLeft;
+    else if (colRight > viewLeft + viewW) gridViewport.scrollLeft = colRight - viewW;
+
+    renderVisibleRows(true);
+    repositionSelection();
+    cellAddress.blur();
+
+    if (autoCopyCb.checked) {
+      clipTA.value = data[r][c];
+      clipTA.select();
+      try { document.execCommand('copy'); } catch (ex) {}
+    }
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    if (selRow >= 0) cellAddress.value = colName(selCol) + (selRow + 1);
+    else cellAddress.value = '—';
+    cellAddress.blur();
+  }
+});
+cellAddress.addEventListener('focus', () => cellAddress.select());
+</script>
+</body>
+</html>
