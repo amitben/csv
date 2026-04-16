@@ -1,7 +1,7 @@
 // Minimal service worker for PWA install eligibility
 // Uses a cache-first strategy for the app files
 
-const CACHE = 'csv-viewer-v1';
+const CACHE = 'csv-viewer-v2';
 const FILES = ['./csv-viewer.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -10,7 +10,10 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
-  e.waitUntil(clients.claim());
+  e.waitUntil(
+    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(() => clients.claim())
+  );
 });
 
 self.addEventListener('fetch', e => {
