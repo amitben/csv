@@ -1,0 +1,34 @@
+{
+  "name": "CSV Viewer",
+  "short_name": "CSV Viewer",
+  "description": "Lightweight CSV file viewer with virtual scrolling, search, and sort",
+  "start_url": "./csv-viewer.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#121217",
+  "theme_color": "#121217",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "./csv-viewer.html",
+      "accept": {
+        "text/csv": [".csv"],
+        "text/tab-separated-values": [".tsv"]
+      }
+    }
+  ]
+}
